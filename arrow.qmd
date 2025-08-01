@@ -1,0 +1,155 @@
+---
+title: Arrow demonstration
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+#| message: false
+library(mrgsolve)
+library(arrow)
+library(dplyr)
+library(glue)
+```
+
+```{r}
+#| message: false
+mod <- modlib("popex", end = 24, delta = 1)
+```
+
+```{r}
+dose <-
+  expand.ev(ID = 1:300, amt = c(100, 200, 300, 400), rep = 1:3000) %>%
+  mutate(dose = amt) %>% 
+  as_tibble() %>% 
+  mutate(chunk = rep(1:25, length.out = n()))
+
+dose
+
+length(unique(dose$ID))
+
+nrow(dose) * 26
+```
+
+```{r}
+#| fig.width = 4, fig.height = 3
+mrgsim(mod, slice(dose, 1)) %>% plot("IPRED", ylab = "Concentration")
+```
+
+```{r}
+sp <- split(dose, dose$chunk)
+
+length(sp)
+
+sp[[1]]
+```
+
+```{r}
+#| eval: false
+unlink("output", recursive = TRUE)
+
+dir.create("output")
+
+out <- parallel::mclapply(sp, function(chunk) {
+  
+  out <- mrgsim_df(mod, chunk, carry_out = "chunk,dose,rep")
+  
+  write_dataset(out, "output", partitioning = c("chunk", "dose"))
+  
+}, mc.cores = 5)
+```
+
+```{r}
+system("du -sh output")
+```
+
+
+```{r}
+ds <- open_dataset("output") # instant
+
+ds # load when needed
+
+glimpse(ds)
+
+nrow(ds)
+
+ds
+```
+
+```{r}
+filter(ds, rep==1521)
+
+filter(ds, rep==1521) %>% class()
+```
+
+
+```{r}
+filter(ds, rep==1521) %>% collect()
+
+system.time(
+  filter(ds, rep==1521) %>% as_tibble()
+)
+```
+
+Get the mean trough concentration for 200 mg dose
+
+```{r}
+#| eval: false
+
+pipe1 <- 
+  ds %>% 
+  filter(dose==200, time==24)  %>%
+  select(IPRED, rep) %>% 
+  group_by(rep) %>% 
+  collect() %>% 
+  summarise(Median = median(IPRED), .groups = "drop") %>%
+  arrange(rep)
+
+pipe1
+explain(pipe1)
+```
+
+
+```{r}
+#| eval: false
+out <- collect(pipe1)
+dim(out)
+head(out)
+```
+
+
+```{r}
+pipe2 <- 
+  ds %>% 
+  filter(dose==200, time==24)  %>%
+  group_by(rep) %>% 
+  to_duckdb() %>% 
+  summarise(Median = median(IPRED, na.rm = TRUE), .groups = "drop") %>%
+  arrange(rep)
+```
+
+
+```{r}
+explain(pipe2)
+pipe2
+class(pipe2)
+```
+
+```{r}
+pipe3 <- 
+  ds %>% 
+  filter(dose==200, time==24)  %>%
+  group_by(rep) %>% 
+  to_duckdb() %>% 
+  summarise(Median = median(IPRED, na.rm = TRUE), .groups = "drop") %>%
+  to_arrow() %>% 
+  arrange(rep)
+```
+
+
+```{r}
+pipe3
+class(pipe3)
+```
+

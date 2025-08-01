@@ -1,0 +1,263 @@
+---
+title: duckdb demonstration
+---
+
+
+```{r}
+library(glue)
+
+library(duckplyr)
+methods_restore()
+```
+
+```{r}
+system("du -sh output")
+```
+
+
+```{r}
+ds <- read_parquet_duckdb("output/**")
+
+ds # load when needed
+
+ds2 <- as_duckdb_tibble(ds, prudence = "lavish")
+
+glimpse(ds)
+
+ds
+```
+
+```{r}
+read_parquet("output/chunk=6/dose=100/part-0.parquet") %>% names()
+names(ds)
+```
+
+
+```{r}
+filter(ds, rep==1521)
+
+filter(ds, rep==1521) %>% class()
+```
+
+
+```{r}
+filter(ds, rep==1521) %>% collect()
+
+system.time(
+  filter(ds, rep==1521) %>% as_tibble()
+) # ~2 sec for feather
+
+```
+
+
+```{r}
+filter(ds, rep==1521) %>% select(ID, time, IPRED)
+
+filter(ds, rep==1521) %>% select(ID, time, IPRED) %>% collect()
+```
+
+
+```{r}
+system.time({
+  open_dataset("output") %>% 
+    filter(rep==1521) %>% 
+    collect()
+})
+```
+
+Get the mean trough concentration for 200 mg dose
+
+```{r}
+# system.time(collect(ds)) # all the data, as a data frame in memory
+
+system.time({
+  sims1 <- 
+    ds %>% 
+    filter(dose==200, time==24)  %>%
+    group_by(rep) %>% 
+    summarise(Mean = mean(IPRED), .groups = "drop") %>%
+    arrange(rep) %>% 
+    collect()
+}); sims1
+```
+
+
+```{r}
+#' Get mean trough concentration for all doses
+system.time({
+  sims1b <- 
+    ds %>% 
+    filter(time==24)  %>%
+    group_by(rep, dose) %>% 
+    summarise(Mean = mean(IPRED), n = n(), .groups = "drop") %>%
+    arrange(rep, dose) %>% 
+    collect()
+})
+```
+
+First collect, then summarise the data
+
+```{r}
+#' First collect, then summarise
+system.time({
+  sims2 <- 
+    collect(ds) %>% 
+    filter(dose ==200, time==24)  %>%
+    group_by(rep) %>% 
+    summarise(Mean = mean(IPRED), n = n(), .groups = "drop")
+})
+```
+
+# Multiple aggregation across all doses
+
+```{r}
+system.time({
+  sims5 <- 
+    ds %>% 
+    group_by(rep, dose, ID) %>% 
+    summarise(Cmax = max(IPRED), .groups = "drop") %>% 
+    group_by(rep, dose) %>%
+    summarise(med = mean(Cmax), .groups = "drop") %>%
+    group_by(dose) %>% 
+    summarise(
+      Med = median(med), 
+      Min = min(med), 
+      Max = max(med),
+      n = n()
+    ) %>% 
+    arrange(dose) %>% 
+    collect()
+})
+dim(ds)
+sims5  
+```
+
+
+# Collect first, then aggregate
+
+```{r}
+system.time({
+  sims6 <- 
+    ds %>% 
+    collect() %>% 
+    group_by(rep, dose, ID) %>% 
+    summarise(Cmax = max(IPRED), .groups = "drop") %>% 
+    group_by(rep, dose) %>%
+    summarise(med = mean(Cmax), .groups = "drop") %>%
+    group_by(dose) %>% 
+    summarise(
+      Med = median(med), 
+      Min = min(med), 
+      Max = max(med),
+      n = n()
+    ) %>% arrange(dose) 
+})
+sims6 
+```
+
+
+# Can Arrow Table speed up vs data.frame?
+
+## Only aggregate
+
+```{r}
+system.time(x <- collect(ds))
+
+system.time({
+  sims7 <- 
+    x %>% 
+    group_by(rep, dose, ID) %>% 
+    summarise(Cmax = max(IPRED), .groups = "drop") %>% 
+    group_by(rep, dose) %>%
+    summarise(med = mean(Cmax), .groups = "drop") %>%
+    group_by(dose) %>% 
+    summarise(
+      Med = median(med), 
+      Min = min(med), 
+      Max = max(med),
+      n = n()
+    ) %>% arrange(dose)
+})
+```
+
+# Coerce to arrow table, then aggregate
+
+```{r}
+system.time(at <- as_arrow_table(x))
+
+system.time({
+  sims8 <- 
+    at %>%
+    group_by(rep, dose, ID) %>% 
+    summarise(Cmax = max(IPRED), .groups = "drop") %>% 
+    group_by(rep, dose) %>%
+    summarise(med = mean(Cmax), .groups = "drop") %>%
+    group_by(dose) %>% 
+    summarise(
+      Med = median(med), 
+      Min = min(med), 
+      Max = max(med),
+      n = n()
+    ) %>% 
+    arrange(dose) %>% 
+    collect()
+})
+```
+
+# Single File API, with data.frame
+
+- Data frame is _in memory_
+
+```{r}
+# write_parquet(ds, sink = "ds.parquet")
+```
+
+```{r}
+file.size("ds.parquet") / 1e6
+
+system.time(df <- read_parquet("ds.parquet"))
+
+system.time({
+  sims9 <-
+    df %>%
+    group_by(rep, dose, ID) %>%
+    summarise(Cmax = max(IPRED), .groups = "drop") %>%
+    group_by(rep, dose) %>%
+    summarise(med = mean(Cmax), .groups = "drop") %>%
+    group_by(dose) %>%
+    summarise(
+      Med = median(med),
+      Min = min(med),
+      Max = max(med),
+      n = n()
+    ) %>%
+    arrange(dose)
+})
+```
+
+# Single file API with ArrowTable
+
+- ArrowTable is _in memory_
+
+```{r}
+system.time(at <- read_parquet("ds.parquet", as_data_frame=FALSE))
+
+system.time({
+  sims10 <-
+    at %>%
+    group_by(rep, dose, ID) %>%
+    summarise(Cmax = max(IPRED), .groups = "drop") %>%
+    group_by(rep, dose) %>%
+    summarise(med = mean(Cmax), .groups = "drop") %>%
+    group_by(dose) %>%
+    summarise(
+      Med = median(med), 
+      Min = min(med), 
+      Max = max(med),
+      n = n()
+    ) %>% 
+    arrange(dose) %>%
+    collect()
+})
+```
+
