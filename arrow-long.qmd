@@ -11,7 +11,7 @@ library(mrgsolve)
 library(arrow)
 library(dplyr)
 library(glue)
-library(duckplyr)
+#library(duckplyr)
 ```
 
 ```{r}
@@ -84,6 +84,8 @@ filter(ds, rep==1521) %>% class()
 
 ```{r}
 filter(ds, rep==1521) %>% collect()
+
+filter(ds, rep==1521) %>% compute()
 
 system.time(
   filter(ds, rep==1521) %>% as_tibble()

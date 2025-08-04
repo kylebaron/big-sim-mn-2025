@@ -102,7 +102,6 @@ pipe1 <-
   filter(dose==200, time==24)  %>%
   select(IPRED, rep) %>% 
   group_by(rep) %>% 
-  collect() %>% 
   summarise(Median = median(IPRED), .groups = "drop") %>%
   arrange(rep)
 
